@@ -193,3 +193,131 @@ describe('Test "scan" API endpoint', () => {
     expect(res.body.data.result[1].is_infected).toBe(false);
   });
 });
+
+describe('Test "scan" result cache', () => {
+  let srv;
+  let errorSpy;
+  const formKey = () => `${process.env.APP_FORM_KEY}`;
+
+  // prepares a fresh mocked clamd stream which emits `event` shortly after the request starts
+  const mockClamd = (event, payload) => {
+    const mockedStream = new PassThrough();
+    NodeClam.__setMockedStream(mockedStream);
+    setTimeout(() => mockedStream.emit(event, payload), 50);
+  };
+
+  beforeEach(() => {
+    NodeClam.mockPassThrough.mockClear();
+    NodeClam.mockGetVersion.mockClear();
+    NodeClam.__setGetVersionReject(false);
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach((done) => {
+    NodeClam.__setGetVersionReject(false);
+    errorSpy.mockRestore();
+    srv.close(done);
+  });
+
+  it('should scan the same clean file only once and return cached result with current name', async () => {
+    srv = await makeServer(config);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const res1 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    const res2 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01, 'renamed.rnd');
+    expect(res1.statusCode).toEqual(200);
+    expect(res2.statusCode).toEqual(200);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(1);
+    expect(NodeClam.mockGetVersion).toHaveBeenCalledTimes(1);
+    expect(res1.body.data.result).toEqual([{ name: '1Mfile01.rnd', is_infected: false, viruses: [] }]);
+    expect(res2.body).toEqual({
+      success: true,
+      data: { result: [{ name: 'renamed.rnd', is_infected: false, viruses: [] }] },
+    });
+  });
+
+  it('should cache infected result', async () => {
+    srv = await makeServer(config);
+    mockClamd('scan-complete', { isInfected: true, viruses: ['bad_virus'] });
+    const res1 = await request(srv).post('/api/v1/scan').attach(formKey(), infectedFile);
+    const res2 = await request(srv).post('/api/v1/scan').attach(formKey(), infectedFile);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(1);
+    expect(res1.body.data.result).toEqual([{ name: 'eicar_com.zip', is_infected: true, viruses: ['bad_virus'] }]);
+    expect(res2.body).toEqual(res1.body);
+  });
+
+  it('should scan cached and uncached files in one request', async () => {
+    srv = await makeServer(config);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('scan-complete', { isInfected: true, viruses: ['bad_virus'] });
+    const res = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01).attach(formKey(), infectedFile);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(2);
+    expect(res.body.data.result).toEqual([
+      { name: '1Mfile01.rnd', is_infected: false, viruses: [] },
+      { name: 'eicar_com.zip', is_infected: true, viruses: ['bad_virus'] },
+    ]);
+  });
+
+  it('should scan twice when cache is disabled', async () => {
+    srv = await makeServer({ ...config, cacheConfig: { ...config.cacheConfig, enabled: false } });
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const res = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    expect(res.statusCode).toEqual(200);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(2);
+    expect(NodeClam.mockGetVersion).not.toHaveBeenCalled();
+  });
+
+  it('should scan twice when cacheConfig is missing', async () => {
+    srv = await makeServer({ avConfig: config.avConfig, fuConfig: config.fuConfig });
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not cache error and timeout results', async () => {
+    srv = await makeServer(config);
+    mockClamd('error', new Error(rejectErrorMessage));
+    const res1 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('timeout', new Error(rejectErrorMessage));
+    const res2 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const res3 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    expect(res1.statusCode).toEqual(500);
+    expect(res2.statusCode).toEqual(500);
+    expect(res3.statusCode).toEqual(200);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(3);
+  });
+
+  it('should skip cache and still scan when DB version is unavailable', async () => {
+    srv = await makeServer(config);
+    NodeClam.__setGetVersionReject(true);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const res1 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const res2 = await request(srv).post('/api/v1/scan').attach(formKey(), cleanFile01);
+    expect(res1.statusCode).toEqual(200);
+    expect(res2.statusCode).toEqual(200);
+    expect(res2.body.data.result).toEqual([{ name: '1Mfile01.rnd', is_infected: false, viruses: [] }]);
+    expect(NodeClam.mockPassThrough).toHaveBeenCalledTimes(2);
+  });
+
+  it('should still scan when the cache backend fails', async () => {
+    srv = await makeServer(config);
+    const failingCache = {
+      get: jest.fn().mockRejectedValue(new Error('cache down')),
+      set: jest.fn().mockRejectedValue(new Error('cache down')),
+    };
+    const scanFile = require('../utils/scanFile');
+    const av = await new NodeClam().init();
+    mockClamd('scan-complete', { isInfected: false, viruses: [] });
+    const upload = { name: 'f', size: 3, data: Buffer.from('abc') };
+    const r = await scanFile(upload, av, { cache: failingCache, getDbVersion: async () => '1' });
+    expect(r).toEqual({ name: 'f', is_infected: false, viruses: [] });
+    expect(failingCache.get).toHaveBeenCalledTimes(1);
+    expect(failingCache.set).toHaveBeenCalledTimes(1);
+  });
+});

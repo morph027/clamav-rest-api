@@ -120,6 +120,12 @@ Here is a short description of those parameters:
   - `STATS_REDIS` - address of the _REDIS_ server for collecting statistics: `redis[s]://[host][:port]`.
   - `STATS_REDIS_INSECURE` - `true` or `false` indicates whether to check remote server SSL certificate
   - `STATS_REDIS_AUTH` - _REDIS_ server credentials passed as `JSON`: `{"username":"user_name","password":"user_password"}`
+- `CACHE_ENABLED` - `true` (default) or `false`. Scan results are cached by the SHA-256 hash of the file content, so re-uploading the same file returns the cached result without scanning it again. The cache key also contains the ClamAV signature database version (checked at most once per minute), so cached results are invalidated automatically when signatures are updated. Errors and timeouts are never cached.
+  - `CACHE_TYPE` - `memory` (default, per instance) or `redis` (shared between instances). If _REDIS_ cannot be reached at startup, an error is logged and the API runs without cache.
+  - `CACHE_TTL` - cache entry lifetime in seconds (default `3600`)
+  - `CACHE_MAX_ENTRIES` - max number of entries in the memory cache, least recently used entries are evicted (default `10000`)
+  - `CACHE_REDIS_URL` - address of the _REDIS_ server: `redis[s]://[[username][:password]@][host][:port][/db-number]`
+  - `CACHE_REDIS_PREFIX` - prefix of _REDIS_ keys (default `cra:scan:`)
 
 As stated before you can set all those parameters by setting environment variables:
 

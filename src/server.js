@@ -7,17 +7,22 @@ const fileUpload = require('express-fileupload');
 const versionRouter = require('./routes/version');
 const scanRouter = require('./routes/scan');
 const dbSignaturesRouter = require('./routes/dbsignatures');
+const { createCache } = require('./cache');
+const { createDbVersionGetter } = require('./utils/dbVersion');
 
 async function makeServer(cfg) {
   try {
     const newAvConfig = Object.assign({}, cfg.avConfig);
     const clamscan = await new NodeClam().init(newAvConfig);
+    const cache = await createCache(cfg.cacheConfig);
+    const scanCache = cache ? { cache, getDbVersion: createDbVersionGetter(clamscan) } : null;
     const PORT = process.env.APP_PORT || 3000;
     const app = express();
 
     app.use(cors());
     app.use((req, res, next) => {
       req._av = clamscan;
+      req._cache = scanCache;
       next();
     });
 
@@ -35,6 +40,7 @@ async function makeServer(cfg) {
       process.env.NODE_ENV !== 'test' &&
         console.log(`Server started on PORT: ${PORT}`);
     });
+    cache && srv.on('close', () => cache.close());
     return srv;
   } catch (error) {
     throw new Error(`Cannot initialize clamav object: ${error}`);

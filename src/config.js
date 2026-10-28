@@ -35,7 +35,22 @@ const fuConfig = {
   },
 };
 
+const positiveInt = (value, defaultValue) => {
+  const n = parseInt(value);
+  return n > 0 ? n : defaultValue;
+};
+
+const cacheConfig = {
+  enabled: process.env.CACHE_ENABLED !== 'false',
+  type: (process.env.CACHE_TYPE || 'memory').toLowerCase(),
+  ttl: positiveInt(process.env.CACHE_TTL, 3600), // seconds
+  maxEntries: positiveInt(process.env.CACHE_MAX_ENTRIES, 10000), // memory cache only
+  redisUrl: process.env.CACHE_REDIS_URL,
+  redisPrefix: process.env.CACHE_REDIS_PREFIX || 'cra:scan:',
+};
+
 module.exports = {
   avConfig,
   fuConfig,
+  cacheConfig,
 };

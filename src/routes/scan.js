@@ -24,7 +24,7 @@ router.route('/').post(async (req, res, next) => {
   let resultArray = [];
   for (const f of toScan) {
     try {
-      const r = await scanFile(f, av);
+      const r = await scanFile(f, av, req._cache);
       resultArray.push(r);
     } catch (err) {
       return res.status(500).json({ success: false, data: { error: err.message } });
